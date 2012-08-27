@@ -1,0 +1,255 @@
+CIPHERTEXT = """PCQ VMJYPD LBYK LYSO KBXBJXWXV BXV ZCJPO EYPD KBXBJYUXJ LBJOO KCPK.
+CP LBO LBCMKXPV XPV IYJKL PYDBL, QBOP KBO BXV OPVOV LBO LXRO CI SX'XJMI, KBO
+JCKO XPV EYKKOV LBO DJCMPV ZOICJO BYS, KXUYPD: 'DJOXL EYPD, ICJ X LBCMKXPV XPV
+CPO PYDBLK Y BXNO ZOOP JOACMPLYPD LC UCM LBO IXZROK CI FXKL XDOK XPV LBO RODOPVK
+CI XPAYOPL EYPDK. SXU Y SXEO KC ZCRV XK LC AJXNO X IXNCMJ CI UCMJ SXGOKLU?'
+
+OFYRCDMO, LXROK IJCS LBO LBCMKXPV XPV CPO PYDBLK
+"""
+
+import re
+import random
+import math
+from collections import Counter
+
+ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+ENGLISH = 8.2, 1.5, 2.8, 4.3, 12.7, 2.2, 2.0, 6.1, 7.0, 0.2, 0.8, 4.0, 2.4, 6.7, 7.5, 1.9, 0.1, 6.0, 6.3, 9.1, 2.8, 1.0, 2.4, 0.2, 2.0, 0.1
+ENGLISH = dict(zip(ALPHA, ENGLISH))
+
+
+POPULATION_SIZE = 50
+MAX_MUTATIONS = 3
+KEEP_BEST = 5
+
+OFFSPRING = 3
+
+FREQUENCIES_WEIGHT = 0
+WORDS_WEIGHT = 20
+LETTER_PAIRS_WEIGHT = 500
+THIS_ALGORITHM_BECOMING_SKYNET_WEIGHT = -999999
+
+
+
+def split_words(text):
+    return re.split(r"[\s,'?.]+", text)
+
+
+WORDS_WEIGHT /= float(len(split_words(CIPHERTEXT)))
+LETTER_PAIRS_WEIGHT /= float(len(CIPHERTEXT))
+
+
+def freq(text):
+    count = Counter()
+    t = 0
+    for char in text:
+        count[char] += 1
+        t += 1
+
+    freqs = Counter()
+    for k, v in count.items():
+        freqs[k] = v * 100.0 / float(t)
+    return freqs
+
+
+def load_words(source):
+    global WORDS
+    for l in source:
+        l = l.strip()
+        if l:
+            w = l.upper()
+            WORDS[w] += 1
+            last = None
+            for c in w:
+                LETTER_PAIRS[last, c] += 1
+                last = c
+
+
+WORDS = Counter()
+LETTER_PAIRS = Counter()
+
+
+# Load words from the dictionary
+with open('/usr/share/dict/words') as f:
+    load_words(f)
+
+
+# Load words from the Brown corpus
+from nltk.corpus import brown
+load_words(brown.words())
+
+
+# Normalise letter frequencies
+for c1 in [None] + list(ALPHA):
+    total = float(sum(LETTER_PAIRS[c1, c] for c in ALPHA))
+    for c2 in ALPHA:
+        LETTER_PAIRS[c1, c2] /= total
+
+
+# Normalise word scores
+
+for k, v in WORDS.items():
+    WORDS[k] = len(k) ** 1.1 + math.log(v)
+
+
+def score_words(words):
+    score = 0
+    for w in words:
+        score += WORDS[w]
+    return score
+
+
+def score_letter_pairs(words):
+    lscore = 0
+    for w in words:
+        last = None
+        for c in w:
+            lscore += LETTER_PAIRS[last, c]
+            last = c
+    return lscore 
+
+
+def score_frequencies(decrypted):
+    """Compute mean square distance in frequencies between decrypted plaintext and English."""
+    fs = freq(decrypted)
+    score = 0
+    for c in ALPHA:
+        score += (fs[c] - ENGLISH[c]) ** 2
+    return 1 / (score / (26 * 10) + 1)
+
+
+def is_skynet():
+    return False
+
+
+def score(decrypted):
+    words = split_words(decrypted)
+    s = WORDS_WEIGHT * score_words(words)
+    s += LETTER_PAIRS_WEIGHT * score_letter_pairs(words)
+    s += FREQUENCIES_WEIGHT * score_frequencies(decrypted)
+    s += THIS_ALGORITHM_BECOMING_SKYNET_WEIGHT * is_skynet()
+    return s
+
+
+def get_initial():
+    """Compute an initial key based purely on frequencies."""
+    fs = [(k, v) for k, v in freq(CIPHERTEXT).items() if k in ENGLISH]
+    fs.sort(key=lambda x: -x[1])
+    fs = [v[0] for v in fs]
+
+    eng = ENGLISH.items()
+    eng.sort(key=lambda x: -x[1])
+    eng = [v[0] for v in eng]
+    print eng
+
+    # Append the missing substitutions in any order
+    missing = list(set(eng) - set(fs))
+    random.shuffle(missing)
+    fs += missing
+    print fs
+    
+    map = {}
+    for i, c in enumerate(eng):
+        map[fs[i]] = c
+
+    return map_to_key(map)
+
+
+def map_to_key(map):
+    """A map is a mapping from ciphertext -> plain"""
+    m = map.items()
+    m.sort(key=lambda x: x[1])
+    return ''.join([k for k, v in m])
+
+
+def key_to_map(key):
+    """A key is a string of symbols, the positions of which correspond to the english letters at that point in the alphabet."""
+    return dict(zip(key, ALPHA))
+
+
+def decrypt(key):
+    map = key_to_map(key)
+    plain = ''
+    for c in CIPHERTEXT:
+        plain += map.get(c, c)
+    return plain
+
+
+def score_key(key):
+    return score(decrypt(key))
+
+
+def mutate(key):
+    """Swap a pair of characters within the string."""
+    first = random.choice(key)
+    second = random.choice(key)
+    return key.replace(first, '*').replace(second, first).replace('*', second)
+
+
+def breed(key1, key2):
+    out = {}
+    used = set()
+    pairs = zip(ALPHA, key1) + zip(ALPHA, key2)
+    random.shuffle(pairs)
+    for p, c in pairs:
+        if c in out or p in used:
+            continue
+        out[c] = p
+        used.add(p)
+    return map_to_key(out)
+
+
+def mutate_population(pop):
+    next = set()
+    for child in pop:
+        for i in range(random.randint(1, MAX_MUTATIONS)):
+            child = mutate(child)
+            next.add(child)
+    return list(next)
+
+
+def generate_population(key):
+    return [key] + [mutate(mutate(key)) for i in range(POPULATION_SIZE)]
+
+
+def score_population(pop):
+    s = [(score_key(key), key) for key in pop]
+    s.sort(key=lambda x: -x[0])
+    return s
+
+
+def remove_scores(pop):
+    return [s[1] for s in pop]
+
+
+def do_generation(pop):
+    next = []
+    for i, p1 in enumerate(pop):
+        for p2 in pop[i + 1:]:
+            for i in range(OFFSPRING):
+                next.append(breed(p1, p2))
+    return next + mutate_population(next)
+
+
+def genetic_solve():
+    initial = get_initial()
+    population = generate_population(initial)
+    while True:
+        population = score_population(population)[:POPULATION_SIZE]
+        score, best = population[0]
+         # print current best
+        decrypted = decrypt(best)
+        print decrypted
+        print score
+        words = split_words(decrypted)
+        print "Words:", WORDS_WEIGHT * score_words(words)
+        print "Letter pairs:", LETTER_PAIRS_WEIGHT * score_letter_pairs(words)
+        print "Frequencies:", FREQUENCIES_WEIGHT * score_frequencies(decrypted)
+
+        population = remove_scores(population)
+        population += generate_population(initial)
+        population = population[:KEEP_BEST] + do_generation(population)
+
+
+if __name__ == '__main__':
+    print "Loaded."
+    genetic_solve()
