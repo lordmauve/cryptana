@@ -1,11 +1,6 @@
-CIPHERTEXT = """PCQ VMJYPD LBYK LYSO KBXBJXWXV BXV ZCJPO EYPD KBXBJYUXJ LBJOO KCPK.
-CP LBO LBCMKXPV XPV IYJKL PYDBL, QBOP KBO BXV OPVOV LBO LXRO CI SX'XJMI, KBO
-JCKO XPV EYKKOV LBO DJCMPV ZOICJO BYS, KXUYPD: 'DJOXL EYPD, ICJ X LBCMKXPV XPV
-CPO PYDBLK Y BXNO ZOOP JOACMPLYPD LC UCM LBO IXZROK CI FXKL XDOK XPV LBO RODOPVK
-CI XPAYOPL EYPDK. SXU Y SXEO KC ZCRV XK LC AJXNO X IXNCMJ CI UCMJ SXGOKLU?'
+import sys
 
-OFYRCDMO, LXROK IJCS LBO LBCMKXPV XPV CPO PYDBLK
-"""
+CIPHERTEXT = open(sys.argv[1]).read()
 
 import re
 import random
@@ -18,8 +13,8 @@ ENGLISH = dict(zip(ALPHA, ENGLISH))
 
 
 POPULATION_SIZE = 50
-MAX_MUTATIONS = 3
-KEEP_BEST = 5
+MAX_MUTATIONS = 2
+KEEP_BEST = 100
 
 OFFSPRING = 3
 
@@ -125,7 +120,7 @@ def score(decrypted):
     words = split_words(decrypted)
     s = WORDS_WEIGHT * score_words(words)
     s += LETTER_PAIRS_WEIGHT * score_letter_pairs(words)
-    s += FREQUENCIES_WEIGHT * score_frequencies(decrypted)
+    #s += FREQUENCIES_WEIGHT * score_frequencies(decrypted)
     s += THIS_ALGORITHM_BECOMING_SKYNET_WEIGHT * is_skynet()
     return s
 
@@ -165,12 +160,16 @@ def key_to_map(key):
     """A key is a string of symbols, the positions of which correspond to the english letters at that point in the alphabet."""
     return dict(zip(key, ALPHA))
 
+A_OFF = ord('A')
+
 
 def decrypt(key):
-    map = key_to_map(key)
     plain = ''
     for c in CIPHERTEXT:
-        plain += map.get(c, c)
+        if 'A' <= c <= 'Z':
+            plain += key[ord(c) - A_OFF]
+        else:
+            plain += c
     return plain
 
 
@@ -195,7 +194,19 @@ def breed(key1, key2):
             continue
         out[c] = p
         used.add(p)
+    
+    # at this point there may be some pairs missing
+    keys = set(ALPHA) - set(out)
+    values = set(ALPHA) - set(out.values())
+    out.update(dict(zip(keys, values)))
+
     return map_to_key(out)
+
+
+def check_keys(ks):
+    for k in ks:
+        if len(k) != 26:
+            raise ValueError(k)
 
 
 def mutate_population(pop):
@@ -227,12 +238,16 @@ def do_generation(pop):
         for p2 in pop[i + 1:]:
             for i in range(OFFSPRING):
                 next.append(breed(p1, p2))
-    return next + mutate_population(next)
+    check_keys(next)
+    mutated = mutate_population(next)
+    check_keys(mutated)
+    return next + mutated
 
 
 def genetic_solve():
     initial = get_initial()
     population = generate_population(initial)
+    check_keys(population)
     while True:
         population = score_population(population)[:POPULATION_SIZE]
         score, best = population[0]
