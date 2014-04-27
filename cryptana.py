@@ -1,11 +1,11 @@
-import sys
-
-CIPHERTEXT = open(sys.argv[1]).read()
-
 import re
 import random
 import math
 from collections import Counter
+from itertools import count
+
+from multiprocessing import Pool
+
 
 ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 ENGLISH = 8.2, 1.5, 2.8, 4.3, 12.7, 2.2, 2.0, 6.1, 7.0, 0.2, 0.8, 4.0, 2.4, 6.7, 7.5, 1.9, 0.1, 6.0, 6.3, 9.1, 2.8, 1.0, 2.4, 0.2, 2.0, 0.1
@@ -20,17 +20,12 @@ OFFSPRING = 3
 
 FREQUENCIES_WEIGHT = 0
 WORDS_WEIGHT = 20
-LETTER_PAIRS_WEIGHT = 500
+LETTER_PAIRS_WEIGHT = 1
 THIS_ALGORITHM_BECOMING_SKYNET_WEIGHT = -999999
-
 
 
 def split_words(text):
     return re.split(r"[\s,'?.]+", text)
-
-
-WORDS_WEIGHT /= float(len(split_words(CIPHERTEXT)))
-LETTER_PAIRS_WEIGHT /= float(len(CIPHERTEXT))
 
 
 def freq(text):
@@ -57,6 +52,7 @@ def load_words(source):
             for c in w:
                 LETTER_PAIRS[last, c] += 1
                 last = c
+            LETTER_PAIRS[last, None] += 1
 
 
 WORDS = Counter()
@@ -86,7 +82,7 @@ for k, v in WORDS.items():
     WORDS[k] = len(k) ** 1.1 + math.log(v)
 
 
-def score_words(words):
+def score_word_freqs(words):
     score = 0
     for w in words:
         score += WORDS[w]
@@ -100,7 +96,8 @@ def score_letter_pairs(words):
         for c in w:
             lscore += LETTER_PAIRS[last, c]
             last = c
-    return lscore 
+        lscore += LETTER_PAIRS[last, None]
+    return lscore
 
 
 def score_frequencies(decrypted):
@@ -118,7 +115,11 @@ def is_skynet():
 
 def score(decrypted):
     words = split_words(decrypted)
-    s = WORDS_WEIGHT * score_words(words)
+    return score_words(words)
+
+
+def score_words(words):
+    s = WORDS_WEIGHT * score_word_freqs(words)
     s += LETTER_PAIRS_WEIGHT * score_letter_pairs(words)
     #s += FREQUENCIES_WEIGHT * score_frequencies(decrypted)
     s += THIS_ALGORITHM_BECOMING_SKYNET_WEIGHT * is_skynet()
@@ -141,7 +142,7 @@ def get_initial():
     random.shuffle(missing)
     fs += missing
     print fs
-    
+
     map = {}
     for i, c in enumerate(eng):
         map[fs[i]] = c
@@ -163,18 +164,18 @@ def key_to_map(key):
 A_OFF = ord('A')
 
 
-def decrypt(key):
-    plain = ''
-    for c in CIPHERTEXT:
+def decrypt(ciphertext, key):
+    plain = []
+    for c in ciphertext:
         if 'A' <= c <= 'Z':
-            plain += key[ord(c) - A_OFF]
+            plain.append(key[ord(c) - A_OFF])
         else:
-            plain += c
-    return plain
+            plain.append(c)
+    return ''.join(plain)
 
 
-def score_key(key):
-    return score(decrypt(key))
+def score_key(ciphertext, key):
+    return score(decrypt(ciphertext, key))
 
 
 def mutate(key):
@@ -194,7 +195,7 @@ def breed(key1, key2):
             continue
         out[c] = p
         used.add(p)
-    
+
     # at this point there may be some pairs missing
     keys = set(ALPHA) - set(out)
     values = set(ALPHA) - set(out.values())
@@ -222,8 +223,8 @@ def generate_population(key):
     return [key] + [mutate(mutate(key)) for i in range(POPULATION_SIZE)]
 
 
-def score_population(pop):
-    s = [(score_key(key), key) for key in pop]
+def score_population(ciphertext, pop):
+    s = [(score_key(ciphertext, key), key) for key in pop]
     s.sort(key=lambda x: -x[0])
     return s
 
@@ -236,7 +237,7 @@ def do_generation(pop):
     next = []
     for i, p1 in enumerate(pop):
         for p2 in pop[i + 1:]:
-            for i in range(OFFSPRING):
+            for i in xrange(OFFSPRING):
                 next.append(breed(p1, p2))
     check_keys(next)
     mutated = mutate_population(next)
@@ -244,17 +245,53 @@ def do_generation(pop):
     return next + mutated
 
 
-def genetic_solve():
+pool = None
+ciphertext = None
+cipherwords = None
+
+
+def set_ciphertext(t):
+    global ciphertext, cipherwords
+    ciphertext = t
+    cipherwords = split_words(t)
+
+
+def score_key_multi(key):
+    return score_words([decrypt(w, key) for w in cipherwords])
+
+
+def score_population_multi(pop):
+    try:
+        s = zip(pool.map(score_key_multi, pop), set(pop))
+    except:
+        pool.terminate()
+        pool.join()
+        raise
+    s.sort(key=lambda x: -x[0])
+    return s
+
+
+def genetic_solve(ciphertext, multiprocess=True):
+    global pool
     initial = get_initial()
     population = generate_population(initial)
     check_keys(population)
-    while True:
-        population = score_population(population)[:POPULATION_SIZE]
+    if multiprocess:
+        pool = Pool(4, set_ciphertext, (ciphertext,))
+        score_pop = score_population_multi
+    else:
+        score_pop = score_population
+
+    lastdec = None
+    stablecount = 0
+    for gen in count(1):
+        population = score_pop( population)[:POPULATION_SIZE]
         score, best = population[0]
          # print current best
-        decrypted = decrypt(best)
+        decrypted = decrypt(ciphertext, best)
         print decrypted
-        print score
+        print "Generation:", gen
+        print "Best score:", score
         words = split_words(decrypted)
         print "Words:", WORDS_WEIGHT * score_words(words)
         print "Letter pairs:", LETTER_PAIRS_WEIGHT * score_letter_pairs(words)
@@ -264,7 +301,22 @@ def genetic_solve():
         population += generate_population(initial)
         population = population[:KEEP_BEST] + do_generation(population)
 
+        if lastdec != decrypted:
+            stablecount = 0
+            lastdec = decrypted
+        else:
+            stablecount += 1
+            if stablecount >= 3:
+                return decrypted
+
 
 if __name__ == '__main__':
+    import sys
+
+    CIPHERTEXT = open(sys.argv[1]).read().upper()
+
+    WORDS_WEIGHT /= float(len(split_words(CIPHERTEXT)))
+    LETTER_PAIRS_WEIGHT /= float(len(CIPHERTEXT)) * 2.0
+
     print "Loaded."
-    genetic_solve()
+    genetic_solve(CIPHERTEXT)
